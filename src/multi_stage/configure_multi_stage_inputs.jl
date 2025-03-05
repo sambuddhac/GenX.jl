@@ -83,7 +83,7 @@ returns: dictionary containing updated model inputs, to be used in the generate\
 function configure_multi_stage_inputs(inputs_d::Dict,
         settings_d::Dict,
         NetworkExpansion::Int64)
-    gen = inputs_d["RESOURCES"]
+        gen = inputs_d["RESOURCES"]
 
     # Parameter inputs when multi-year discounting is activated
     cur_stage = settings_d["CurStage"]
