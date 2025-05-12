@@ -18,6 +18,8 @@ function load_network_data!(setup::Dict, path::AbstractString, inputs_nw::Dict, 
     # Number of lines in the network
     L = length(as_vector(:Network_Lines))
     inputs_nw["L"] = L
+    # Topology of the network source-sink matrix
+    inputs_nw["pNet_Map"] = load_network_map(network_var, Z, L)
 
     candidate_flag = false
     if setup["DC_OPF"] == 1
@@ -45,8 +47,6 @@ function load_network_data!(setup::Dict, path::AbstractString, inputs_nw::Dict, 
         inputs_nw["pNet_Map_cand"] = load_network_map(candidate_network_var, Z_cand, L_cand)
     end
 
-    # Topology of the network source-sink matrix
-    inputs_nw["pNet_Map"] = load_network_map(network_var, Z, L)
     # Transmission capacity of the network (in MW)
     #inputs_nw["pTrans_Max"] = zeros(Float64, L_cand)
     if !candidate_flag
@@ -94,8 +94,16 @@ function load_network_data!(setup::Dict, path::AbstractString, inputs_nw::Dict, 
         inputs_nw["Line_Angle_Limit"] = to_floats(:Angle_Limit_Rad)
         # DC-OPF coefficient for each line (in MW when not scaled, in GW when scaled) 
         # MW = (kV)^2/Ohms 
-        inputs_nw["pDC_OPF_coeff"] = ((line_voltage_kV .^ 2) ./ line_reactance_Ohms) /
+        if setup["ParameterScale"] == 1
+            # DC-OPF coefficient for each line (in MW when not scaled, in GW when scaled) 
+            # MW = (kV)^2/Ohms 
+            inputs_nw["pDC_OPF_coeff"] = ((line_voltage_kV .^ 2) ./ line_reactance_Ohms) /
                                         scale_factor
+        else
+            # DC-OPF coefficient for each line (in MW when not scaled, in GW when scaled) 
+            # MW = (kV)^2/Ohms 
+            inputs_nw["pDC_OPF_coeff"] = (1 ./ line_reactance_Ohms)
+        end
         if candidate_flag
             # Transmission line voltage (in kV)
             line_voltage_kV_cand = to_floats_cand(:Line_Voltage_kV)
@@ -105,8 +113,16 @@ function load_network_data!(setup::Dict, path::AbstractString, inputs_nw::Dict, 
             inputs_nw["Line_Angle_Limit_cand"] = to_floats_cand(:Angle_Limit_Rad)
             # DC-OPF coefficient for each line (in MW when not scaled, in GW when scaled) 
             # MW = (kV)^2/Ohms 
-            inputs_nw["pDC_OPF_coeff_cand"] = ((line_voltage_kV_cand .^ 2) ./ line_reactance_Ohms_cand) /
+            if setup["ParameterScale"] == 1
+                # DC-OPF coefficient for each line (in MW when not scaled, in GW when scaled) 
+                # MW = (kV)^2/Ohms 
+                inputs_nw["pDC_OPF_coeff_cand"] = ((line_voltage_kV_cand .^ 2) ./ line_reactance_Ohms_cand) /
                                         scale_factor
+            else
+                # DC-OPF coefficient for each line (in MW when not scaled, in GW when scaled) 
+                # MW = (kV)^2/Ohms 
+                inputs_nw["pDC_OPF_coeff_cand"] = (1 ./ line_reactance_Ohms_cand)
+            end
             # Transmission line candidate expansion capacity (in MW)
             # DC-OPF transmission capacity (in MW) expansion data:
             inputs_nw["Line_Reinforcement_Cap_Size"] = to_floats_cand(:pMax_quantized_MW) /
@@ -135,9 +151,9 @@ function load_network_data!(setup::Dict, path::AbstractString, inputs_nw::Dict, 
             to_floats_cand(:Line_Max_Reinforcement_MW)) / scale_factor # convert to GW
         println("Maximum line reinforcement (in GW): ", inputs_nw["pMax_Line_Reinforcement"])
         # Maximum possible flow after reinforcement for use in linear segments of piecewise approximation
-        inputs_nw["pTrans_Max_Possible"] += inputs_nw["pMax_Line_Reinforcement"]
+        #inputs_nw["pTrans_Max_Possible"] += inputs_nw["pMax_Line_Reinforcement"]
     end
-    println("Maximum possible flow after reinforcement (in GW): ", inputs_nw["pTrans_Max_Possible"])
+    #println("Maximum possible flow after reinforcement (in GW): ", inputs_nw["pTrans_Max_Possible"])
 
     # Multi-Stage
     if setup["MultiStage"] == 1
@@ -170,22 +186,19 @@ function load_network_data!(setup::Dict, path::AbstractString, inputs_nw::Dict, 
         println("Reading Network Expansion values...")
         println(inputs_nw["pMax_Line_Reinforcement"])
         # Network lines and zones that are expandable have non-negative maximum reinforcement inputs
-        inputs_nw["EXPANSION_LINES"] = findall(inputs_nw["pMax_Line_Reinforcement"] .>= 0)
-        inputs_nw["NO_EXPANSION_LINES"] = findall(inputs_nw["pMax_Line_Reinforcement"] .< 0)
+        inputs_nw["EXPANSION_LINES"] = findall(inputs_nw["pMax_Line_Reinforcement"] .> 0)
+        inputs_nw["NO_EXPANSION_LINES"] = findall(inputs_nw["pMax_Line_Reinforcement"] .<= 0)
     end
 
     println(filename * " Successfully Read!")
 
     return network_var, candidate_network_var
-end
+end 
 
 function calculate_integer_quotients(df::DataFrame)
     quotients = Int[] # Initialize an empty vector of Ints
-    for row in eachrow(df)
-        quotient = row.Line_Max_Reinforcement_MW / row.pMax_quantized_MW
-        integer_quotient = floor(Int, quotient) # Approximate to nearest integer <= quotient
-        push!(quotients, integer_quotient)
-    end
+    quotient = convert(Array{Float64}, collect(skipmissing(df.Line_Max_Reinforcement_MW))) ./ convert(Array{Float64}, collect(skipmissing(df.pMax_quantized_MW)))
+    foreach(x -> push!(quotients, floor(Int, x)), quotient) # Approximate to nearest integer <= quotient
     return quotients
 end
 
@@ -228,6 +241,19 @@ function load_network_map_from_matrix(network_var::DataFrame, Z, L)
     network_map_matrix_format_deprecation_warning()
     col = findall(s -> s == "z1", names(network_var))[1]
     mat = Matrix{Float64}(network_var[1:L, col:(col + Z - 1)])
+
+    # Check if the matrix is square
+    if size(mat, 1) != L || size(mat, 2) != Z
+        error("The network map matrix is not square. Please check the input data.")
+    end
+
+    # Check if the matrix contains only 0, 1, -1 values
+    if any(x -> x != 0 && x != 1 && x != -1, mat)
+        error("The network map matrix contains invalid values. Please check the input data.")
+    end
+
+    # Convert to Float64
+    mat = Float64.(mat)
 end
 
 function load_network_map(network_var::DataFrame, Z, L)
@@ -271,14 +297,19 @@ function create_extended_max_flow_vector(network_df::DataFrame, candidate_df::Da
     if !("Line_Max_Flow_MW" in names(network_df))
         error("Column 'Line_Max_Flow_MW' not found in Network.csv.")
     end
+    as_vector(col::Symbol) = collect(skipmissing(network_df[!, col]))
 
+    as_vector_cand(col::Symbol) = collect(skipmissing(candidate_df[!, col]))
+    to_floats(col::Symbol) = convert(Array{Float64}, as_vector(col))
     # Extract the Line_Max_Flow_MW values from network_df
-    max_flow_values = network_df.Line_Max_Flow_MW
+    #max_flow_values = network_df.Line_Max_Flow_MW
+    max_flow_values = convert(Array{Float64}, as_vector(:Line_Max_Flow_MW))
 
     # Calculate the number of additional rows
-    additional_rows = nrow(candidate_df) - nrow(network_df)
-    println("Number of rows in candidate_df: ", nrow(candidate_df))
-    println("Number of rows in network_df: ", nrow(network_df))
+    #additional_rows = nrow(candidate_df) - nrow(network_df)
+    additional_rows =  length(as_vector_cand(:Network_Lines)) #- length(as_vector(:Network_Lines))
+    println("Number of rows in candidate_df: ", length(as_vector_cand(:Network_Lines)))
+    println("Number of rows in network_df: ", length(as_vector(:Network_Lines)))
     println("Number of additional rows: ", additional_rows)
     # Check if the number of additional rows is positive
     if additional_rows < 0
