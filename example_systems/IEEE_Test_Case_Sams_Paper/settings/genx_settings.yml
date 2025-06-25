@@ -13,4 +13,4 @@ ComputeConflicts: 1 # Flag for computing conflicts; 0 = not active; 1 = active
 WriteOutputs: "full"
 ParameterScale: 0 # Flag for scaling parameters; 0 = not active; 1 = active
 UCommit: 0 # Flag for unit commitment; 0 = not active; 1 = active
-#SOS1: 0 # Flag for SOS1 constraints; 0 = not active; 1 = active
+SOS1: 0 # Flag for SOS1 constraints; 0 = not active; 1 = active
